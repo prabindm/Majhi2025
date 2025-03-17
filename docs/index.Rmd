@@ -1,0 +1,1716 @@
+---
+title: "RNA-Seq Analysis of HBEC-ESR1 cells"
+subtitle: "Majhi_Black 2025"
+author: "Prabin Dhangada Majhi"
+date: "Last complied on `r format(Sys.time(), '%d %B, %Y')`"
+output: 
+        html_document: 
+          code_folding: hide
+          toc: true
+          toc_float: true
+          fig_caption: true
+          keep_md: true
+fig_caption: yes 
+fig_height: 8
+fig_width: 8
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: inline
+---
+
+```{=html}
+<style type="text/css">
+
+h1.title {
+  font-size: 30px;
+  color: DarkRed;
+  text-align: center;
+}
+h3.subtitle {
+  font-size: 18px;
+  color: DarkRed;
+  text-align: center;
+}
+h4.author { /* Header 4 - and the author and data headers use this too  */
+    font-size: 18px;
+  font-family: "Times New Roman", Times, serif;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date { /* Header 4 - and the author and data headers use this too  */
+  font-size: 18px;
+  font-family: "Times New Roman", Times, serif;
+  color: DarkBlue;
+  text-align: center;
+}
+
+h1 {
+  text-align: center;
+}
+
+</style>
+```
+
+#  {.tabset .tabset-pills}
+
+## Main {.active}
+
+### 1.Experimental Information
+
+#### 1.1. Experimental Design
+
+RNA-Seq profiling of the 4 HBEC-ESR1 cell lines (76N TERT-ESR1,
+MCF10A-ESR1, HMECC-ESR1 and ME16C2-ESR1) treated with
+Doxycycline+Control, Doxycycline+ Estrogen (10nM) or Doxycycline+ICI
+(10nM) for 24 h.
+
+#### 1.2 Growth Protocol
+
+The HBEC-*ESR1* were plated at 3 x 10^6^ cells per 60 mm dish in F media
+containing DMEM -pyruvate (Gibco cat. no. 11965-092), Ham’s F12 (Gibco
+cat. no. 11765-054), 5% FBS (Omega scientific cat.no. FB-11), 250ng/mL
+hydrocortisone (Sigma cat.no. H4001), 10ng/mL human epidermal growth
+factor (Tonobo Biosciences cat.no 21-8356-U100), 8.6 ng/mL cholera toxin
+(Millipore Sigma cat.no. 227035), 10 ug/mL human insulin (Sigma cat.no
+I9278-5ML), and 1X antibiotic/antimycotic (Caisson Labs cat.no
+ABL02-100ML) and supplemented with 5% FBS.
+
+#### 1.3 Treatment Protocol
+
+After 24h of growth, F media was replaced with phenol red free F media
+with 10% CSS (PRF-CSS) along with 100ng/ml of doxycycline. After 24h of
+PRF-CSS treatment, cells were treated with either 10nM 17β-estradiol in
+PRF-CSS with doxycycline (E2+Dox) or Vehicle control (i.e. DMSO) (Dox
+Control) for 24h.
+
+#### 1.4 RNA isolation and Library Preparation
+
+Total RNA was extracted using Trizol reagent (Invitrogen, CA, USA)
+following the manufacturer's procedure. The total RNA quality and
+quantity were analysis of Bioanalyzer 2100 and RNA 6000 Nano LabChip Kit
+(Agilent, CA, USA) with RIN number \>7.0. Approximately 10 ug of total
+RNA was subjected to isolate Poly (A) mRNA with poly-T oligo attached
+magnetic beads (Invitrogen). Following purification, the poly(A) mRNA
+fractions is fragmented into small pieces using divalent cations under
+elevated temperature. Then the cleaved RNA fragments were
+reverse-transcribed to create the final cDNA library in accordance with
+a strand-specific library preparation by dUTP method. The average insert
+size for the paired-end libraries was 300±50 bp. And then we performed
+the paired-end 2×150bp sequencing on an Illumina Hiseq 4000 at LC
+Sciences following the vendor's recommended protocol.
+
+### 2. Steps taken to generate input for R
+
+1.  Data downloaded using `wget` from LCSciences ftp server (add
+    details)
+2.  MD5 verified to ensure data integrity
+3.  QC was performed using Fastqc and Multiqc (See multiqc files)
+4.  Sequence alignment and transcript quantification was done with
+    STAR + RSEM
+5.  The `genes.results` files were imported to google drive using
+    Rclone.
+
+### 3. Set Up
+
+1.  We are using [Renv](https://rstudio.github.io/renv/) in this
+    workflow, so it will be a stand alone project and portable without
+    any signficant changes when moved from one computer to another, and
+    reproducible over time.
+2.  In.the code chuck, we will use `packman` to load R packages we need
+    for the analysis.
+3.  We will define some reusable codes that will be useful.
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE,prompt=FALSE}
+
+### we will check if the package manager is installed
+### if not we will installed
+
+if (!require("pacman")) install.packages("pacman")
+library(pacman)
+
+#pacman will not accept a character vector so the same packages are repeated
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+pacman::p_load("tximport","DESeq2","vsn","hexbin","org.Mm.eg.db","ggplot2","grid","gridExtra","limma","tidyverse","circlize","ComplexHeatmap","pheatmap","DT","ggpubr","gridGraphics","cowplot","EnhancedVolcano","goseq","RColorBrewer","getnDiagram","reactome.db","readxl","clusterProfiler", "R.utils", "shiny", "InteractiveComplexHeatmap", "seriation", "ggforce", 'DT', "org.Hs.eg.db", "genefilter", 'ggtext', 'ggvenn', 'RVenn', 'ggVennDiagram', 'sf', 'sessioninfo')
+
+
+####################### re-usable code ##########################
+
+## this is to reload the 
+importRsem2Deseq <- function(path, sampleinfo){
+        #SampleInfo should have the following columns
+        #               1.rownames: that should be same as genes.results
+        #               2. 1st_variable: cell_line/patient_id/genotype
+        #               3. 2nd_variable: treatment/
+        #               x. x-1th variable:
+        #               x+1. replicates
+        # All the variables should be factors. 
+        
+        #load libraries
+        packs <- c("tximport", "DESeq2")
+        lapply(packs, library, character.only = TRUE)
+        
+        #get file paths
+        files <- list.files(path = path, pattern = "genes.results")
+        
+        #arrange the files
+        files <- files %>% order() %>% paste(., ".genes.results", sep = "")
+        
+        #file path
+        filepaths <- paste0(path, files)
+        
+        #name the filespath with sample names
+        names(filepaths) <- str_remove(files, ".genes.results")
+        
+        #read the data
+        txi.rsem <- tximport(filepaths, type = "rsem", txIn = FALSE, txOut = FALSE)
+        
+        txi.rsem$length[txi.rsem$length == 0] <- 1
+#the trascript length is zero in the data, which is set to 1 using the folliwng suggestion (https://support.bioconductor.org/p/84304/)
+        
+        #check if all rsem column names are in sampleinfo
+        all(colnames(txi.rsem$counts)==rownames(sampleinfo))
+        
+        #make a deseq dataset
+        dds <- DESeqDataSetFromTximport(txi.rsem,
+                                colData = sampleinfo,
+                                design = ~Treatment)
+        
+        return(dds)
+        
+        
+}
+
+filterLowCounts <- function(dds, n_reads=5, n_samples=3){
+        dds <- estimateSizeFactors(dds)
+        idx  <- rowSums( counts(dds, normalized=TRUE) >= n_reads ) >= n_samples
+        dds <- dds[idx,]
+        return(dds)
+}
+
+dge_cal <- function(result){
+        sum(result[!is.na(result$padj),]$padj < 0.05) 
+
+}
+
+results_counts <- function(desqDS, result){
+        vsd <- vst(desqDS, blind=FALSE)
+        assayVst <- assay(vsd)
+        data <- assayVst[rownames(result),]
+        
+        data <- data %>% 
+                as.data.frame %>% 
+                rownames_to_column(var = "Gene") %>% dplyr::mutate(
+                        EnsembleID = str_split(Gene, "_", simplify = T)[,1],
+                        Symbol = str_split(Gene, "_", simplify = T)[,2])
+        return(data)
+}
+
+getSig <- function(dataset, padj){
+        dataset <- dataset[!is.na(dataset$padj),]
+        dataset <- dataset[which(dataset$padj < padj),]
+        return(dataset)
+}
+
+
+getSig2 <- function(dataset, padj, log2FoldChange = 0){
+        dataset <- dataset[!is.na(dataset$padj),]
+        dataset <- dataset[which(dataset$padj < padj),]
+        if(is.null(log2FoldChange) == FALSE){
+          dataset2 <- dataset[!is.na(dataset$log2FoldChange),]
+          dataset2 <- dataset[which(abs(dataset$log2FoldChange) >  log2FoldChange),]
+          
+        }else dataset2 <- dataset
+        
+        return(dataset2)
+}
+
+twointersect <- function(x, y){
+        a <- intersect(rownames(x), rownames(y))
+        return(a)
+}
+
+threeintersetct <- function(x, y, z){
+        a <- Reduce(intersect, list(rownames(x), rownames(y), rownames(z)))
+}
+
+pwrite <- function(object, dir){
+setwd(dir)
+if(!file.exists(paste0(substitute(object), ".csv"))){
+write.csv(object, file = paste0(substitute(object), ".csv"))
+}
+}
+
+
+getHeatmapDJJ <- function(dge, vsd) {
+        mat <- twointersect(vsd, dge)
+        mat <- assay(vsd)%>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Gene") %>% 
+  filter(Gene %in% mat) %>% 
+  mutate(Gene = str_split(Gene, "_") %>% map_chr(., 2)) %>% column_to_rownames(var = "Gene")
+
+mat2 <- mat %>% t %>% scale %>% t
+mat2 <- mat2[,order(colnames(mat2), decreasing = T)]
+mat2 <- mat2[,order(unlist(map(colnames(mat2), reverse)),decreasing = T)]
+mat2treatment <- colnames(mat2) %>% str_split(., "_") %>% map_chr(., 2)
+h1 <- Heatmap(as.matrix(mat2),
+              top_annotation = HeatmapAnnotation(
+                treatment = mat2treatment, 
+                col = list(
+                  treatment = c("DMSO" = "Red", "PCB" = "Green"))),
+              cluster_columns = FALSE,
+              show_column_dend = FALSE,
+              cluster_rows = TRUE,
+              show_row_names = TRUE,
+              row_names_gp = gpar(fontsize = 6),
+              width = unit(10, "cm"), 
+              height = unit(25, "cm"))
+return(h1)
+}
+
+theme_pdm4014 <- function(){
+        theme_bw() +
+        theme(
+                axis.text.x = element_text(size = 12, face = "bold", angle = 45, hjust = 1),
+                axis.text.y = element_text(size = 12, face = "bold"),
+              plot.title = element_text(hjust = 0.5),
+              axis.title.y = element_text(size = 12, face = "bold"),
+              strip.text.x = element_text(face = "bold", size = 12),
+              strip.background = element_blank(),
+              strip.text.y = element_text(size = 12, face = "bold"),
+              strip.placement = "outside",
+              legend.position = "none")
+}
+
+djj_getDGE <- function(cellline, comparison){
+        
+        if(!cellline == "All"){
+        #make index according to the parameter supplied
+        idx <- colData(dds_010) %>% as.data.frame() %>% filter(CellLine == cellline) %>% rownames()
+        
+        #subset a new DESeqDataset
+        dds_new = dds_010[,idx]
+        
+        #drop lelevels
+        dds_new$CellLine <- droplevels(dds_new$CellLine)
+        dds_new$Treatment <- droplevels(dds_new$Treatment)
+        
+        #making sure the design
+        design(dds_new) <-  ~ Treatment
+        
+        intergroup=c("Treatment", "Replicate")
+        gp <- geom_point(aes(PC1, PC2, shape=Treatment, color=Replicate, size = 3))
+        
+}else{
+        dds_new = dds_010
+        dds_new$CellLine <- droplevels(dds_new$CellLine)
+        dds_new$Treatment <- droplevels(dds_new$Treatment)
+        design(dds_new) <-~ Treatment + CellLine
+        intergroup=c("Treatment", "CellLine", "Replicate")
+        gp <- geom_point(aes(PC1, PC2, shape=Treatment, color=CellLine, group=Replicate, size = 3))
+
+}
+        
+# Get the variance stabilisated log normalised counts data
+vsd_new <- vst(dds_new)
+
+#Plot a PCA plot
+pcaData <- plotPCA(vsd_new, intgroup=intergroup, returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+p1 <- ggplot(pcaData) +
+  gp +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  ggtitle("HMECS") +
+  coord_fixed()
+
+p1
+
+#run DESeq2
+dde_new <- DESeq(dds_new)
+
+# Get the DGE
+res_param <- results(dde_new, name = comparison, alpha = 0.05)
+
+# Get the signficant genes
+res_sig <- getSig(res_param, padj = 0.05)
+
+
+names_data <- paste(cellline, "_",comparison, sep = "")
+return_list <- list(vsd_new, res_param, res_sig, p1)
+names(return_list) <- c("vsd",
+                        "results",
+                        "Significant",
+                        "PCA"
+                        )
+
+#return data
+return(return_list)
+        
+}
+
+
+djj_getDGE2 <- function(cellline, treatment1, treatment2){
+        
+        if(!cellline == "All"){
+        #make index according to the parameter supplied
+        idx <- colData(dds_010) %>% as.data.frame() %>% filter(CellLine == cellline) %>% rownames()
+        
+        #subset a new DESeqDataset
+        dds_new = dds_010[,idx]
+        
+        #drop lelevels
+        dds_new$CellLine <- droplevels(dds_new$CellLine)
+        dds_new$Treatment <- droplevels(dds_new$Treatment)
+        
+        #making sure the design
+        design(dds_new) <-  ~ Treatment
+        
+        intergroup=c("Treatment", "Replicate")
+        gp <- geom_point(aes(PC1, PC2, shape=Treatment, color=Replicate, size = 3))
+        
+}else{
+        dds_new = dds_010
+        dds_new$CellLine <- droplevels(dds_new$CellLine)
+        dds_new$Treatment <- droplevels(dds_new$Treatment)
+        design(dds_new) <-~ Treatment + CellLine
+        intergroup=c("Treatment", "CellLine", "Replicate")
+        gp <- geom_point(aes(PC1, PC2, shape=Treatment, color=CellLine, group=Replicate, size = 3))
+
+}
+        
+# Get the variance stabilisated log normalised counts data
+vsd_new <- vst(dds_new)
+
+#Plot a PCA plot
+pcaData <- plotPCA(vsd_new, intgroup=intergroup, returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+p1 <- ggplot(pcaData) +
+  gp +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  ggtitle("HMECS") +
+  coord_fixed()
+
+p1
+
+#run DESeq2
+dde_new <- DESeq(dds_new)
+
+# Get the DGE
+res_param <- results(dde_new, contrast = c("Treatment", 
+                                           treatment1, 
+                                           treatment2), alpha = 0.05)
+
+# Get the signficant genes
+res_sig <- getSig(res_param, padj = 0.05)
+
+
+names_data <- paste(cellline, "_",treatment1, "_vs_",treatment2, sep = "")
+return_list <- list(vsd_new, res_param, res_sig, p1)
+names(return_list) <- c("vsd",
+                        "results",
+                        "Significant",
+                        "PCA"
+                        )
+
+#return data
+return(return_list)
+        
+}
+
+```
+
+### 4. Sample Information Preparation
+
+LC sciences uses sample numbers that we have listed in our sample
+subsmission sheet to. So we will combine those informaiton to create a
+usable/simpler sample information table.
+
+#### 4.1 Rename the result files.
+
+I renamed the files `genes.results` with the following command in
+terminal.
+
+I renamed the count files in `terminal` to make it easier to handle.
+
+`for file in ls *; do file2=$(echo "$file" | sed 's/LCS8783_JJ_LCSjjT//g'); cp $file ../rsem_counts2/"$file2"; done`
+
+#### 4.2 Prepare sample information
+
+This code chunck uses the sample submission file to [LC
+Sciences](https://lcsciences.com/) to generate the sample Information,
+that we will use in our analysis. It is pre-run so we will instead use
+the `SampleInfo.csv` file from the directory.
+
+1.  SampleInformation of the HBEC-*ESR1* cells
+
+```{r HBEC_SampleInfo, eval=FALSE, warning=FALSE, message=FALSE}
+#Prepare sample information
+
+
+############ JP data #################
+# I want to collect 
+#       - SampleName or Number that correspons to the genes.results file number
+#       - Cell line
+#       - Treatment
+#       - Replicate Number
+SampleInfo <- readxl::read_excel("../data/JP Poly-A RNA Seq Sample Submission.xlsx", sheet = 1, skip = 29,col_names = TRUE)
+SampleInfo = SampleInfo %>% na.omit() %>% 
+        mutate( 
+                CellLine = str_split(`Sample Name`, "_") %>% map_chr(1),
+                Treatment = str_split(`Sample Name`, "_") %>% map_chr(2) %>% capitalize,
+                Treatment = case_when(
+                        str_detect(Treatment, "E2dox") ~ "Dox_E2",
+                        str_detect(Treatment, "ICInodox") ~ "No_Dox_ICI",
+                        str_detect(Treatment, "Ctrldox") ~ "Dox_Control",
+                        TRUE ~ Treatment
+                        ),
+                Replicate = rep(c(1,2),12)
+                )%>%
+        rename("SampleN" = `Sample Number`) %>% 
+        select(SampleN, CellLine, Treatment, Replicate) %>% 
+        column_to_rownames(var = "SampleN")
+
+
+write.csv(SampleInfo, file = "../data/SampleInfo.csv")
+```
+
+2.  Sample Information for MCF7 and T47D RNA-Seq data from GEO
+    repository.
+
+```{r BC_SampleInfo, eval=FALSE, warning=FALSE, message=FALSE}
+
+################################## inmport  both datasets####################
+        #get information about mcf7
+        #esearch -db gds -query "GSE51403" | elink -target sra | efetch -format docsum | xtract -pattern DocumentSummary -sep "|" -element Experiment@acc Run@acc Run@total_bases Experiment@name > ~/Documents/Data-science/pdm_djj_010/data/GSE51403_v2.txt
+        # get information about T47d
+
+#get file names
+
+        # Prepare MCF7 sampleInfo
+        mcf7_sampleInfo <- tibble(
+        SampleName = c("SRR1012917", "SRR1012921", "SRR1012927",
+                        "SRR1012936", "SRR1012942", "SRR1012948"),
+        CellLine = rep("MCF7", 6),
+      
+        Treatment = c(rep("E2", 3), rep("Control", 3)),
+        Replicate = rep(c(1,2,3), 2),
+        Filepath = mcf7_filepath
+      ) %>% write.csv(SampleInfo, file = "../data/MCF7_SampleInfo.csv")
+
+        
+        # Prepare T47D SampleInfo    
+      t47d_sampleInfo <- read_tsv("~/Google Drive/My Drive/pdm_djj_020/scripts/GSE196876_details.txt", col_names = F) %>% 
+        mutate(X2 = str_extract(X2, "E2|OH"),
+               X2 = case_when(
+                 str_detect(X2, "OH") ~ "Control",
+                 TRUE ~ X2)) %>%
+        slice_tail(n = 6) %>% 
+        `colnames<-`(c("SampleName", "Treatment")) %>% 
+        mutate(
+          CellLine = rep("T47D", 6),
+          Replicate = rep(rep(1:3), 2),
+          Filepath = t47d_filepath) %>% 
+        relocate(CellLine, .before = Treatment) %>% 
+              write.csv(SampleInfo, file = "../data/T47D_SampleInfo.csv")
+        
+```
+
+### 5. Import Data both HBEC-*ESR1*, MCF7 and T47D
+
+We also wanted to compare the estrogen response of our cell lines with
+estrogen response published earlier in breast cancer cell lines and
+normal breast epithelial cell lines. Because estrogen response kinetic
+is well known, and different length of treatment with estrogen have
+different responses, we focused on experiments that had the same
+treatment as ours (i.e 24h).
+
+#### 5.1 Prepare file paths
+
+```{r file_names, eval=FALSE, warning=FALSE, message=FALSE}
+#Prepare File paths
+# mcf7
+mcf7_filepath <-   "~/Google Drive/My Drive/pdm_djj_010/data/mcf7_GSE51403_rsem_counts/"
+#t47d
+t47d_filepath <- "~/Google Drive/My Drive/pdm_djj_020/trimmed_rsem_results/"
+#hbec files
+hmec_filepath <- "~/Google Drive/My Drive/pdm_djj_010/data/rsem_counts2/"
+
+#modify HBEC sampleInfo to align with the BC SampleInfo
+hmec_sampleInfo <- read_csv("../../data/SampleInfo.csv") %>%
+  rename(SampleName = ...1) %>% 
+  mutate_at(vars(SampleName), as.character) %>% 
+  mutate(Filepath = hmec_filepath)
+
+#Combine all SampleInfo
+all_sampleInfo <- bind_rows(
+  mcf7_sampleInfo,
+  t47d_sampleInfo,
+  hmec_sampleInfo
+)
+
+# Give complete filepath
+all_sampleInfo %<>%
+  mutate(
+    Filepath = paste(all_sampleInfo$Filepath, all_sampleInfo$SampleName, ".genes.results", sep = ""),
+    Filename = paste(CellLine, Treatment, Replicate, sep = "_")
+  )
+
+#combine all file path as a column
+
+all_filepaths <- all_sampleInfo$Filepath
+names(all_filepaths) <- all_sampleInfo$Filename
+file.exists(all_filepaths)
+
+all_filepaths %>% map(., readLines, 1) %>% unlist() %>% str_split("\t") %>% unlist()
+
+all_txi.rsem <- tximport(all_filepaths, type = "rsem")
+        
+# replace 0 values in gene length with 1
+all_txi.rsem$length[all_txi.rsem$length == 0] <- 1
+
+
+#Create a Datatable of Samples combined
+# add filenames to rows of sampleinfo
+
+all_sampleInfo <- all_sampleInfo %>% column_to_rownames(var = "Filename")
+
+library(data.table)
+DT::datatable(all_sampleInfo)
+```
+
+#### 5.1 Import Data
+
+```{r Import_data, eval=FALSE, warning=FALSE, message=FALSE }
+all(colnames(all_txi.rsem)==rownames(all_sampleInfo))
+ 
+dds_full <- DESeqDataSetFromTximport(all_txi.rsem,
+                        colData = all_sampleInfo,
+                        design = ~Treatment)
+
+saveRDS(dds_full, file = "20240315_dds_full.RDS")
+
+
+```
+
+#### 5.2 DESeq2 Dataset
+
+All of the above code was run and saved as an RDS file. Now we will read
+the RDS file and generate the dataset in this workflow.
+
+```{r}
+#the full dataset has HBEC-*ESR1*, MCF7 and T47D
+dds_full <- readRDS(file = "data/20240315_dds_full.RDS")
+
+#only the HBEC-ESR1 cells
+dds_010 <- dds_full[,c(13:36)]
+dds_010$Treatment <- droplevels(dds_010$Treatment)
+dds_010$CellLine <- factor(dds_010$CellLine)
+
+#preare normalised counts data
+dds_010sf <- estimateSizeFactors(dds_010)
+counts.sf_normalized <- counts(dds_010sf, normalized=TRUE)
+
+```
+
+### 6. Principal component Analysis
+
+#### 6.1 PCA of showing the difference between cell lines.
+
+This is the figure 5A in the manuscript
+
+```{r}
+vsd_010 <- vst(dds_010, blind = FALSE)
+
+pcaData_010 <- plotPCA(vsd_010, 
+                       intgroup=c("CellLine", "Treatment"), 
+                       ntop = 1000,
+                       returnData=TRUE,
+                       pcsToUse = c(2,3)) %>% 
+  mutate(
+    CellLine = case_match(CellLine,
+                          "76NTERT" ~ "76N TERT",
+                          "HMECC" ~ "HME-CC",
+                          .default = CellLine),
+    Treatment = case_match(Treatment,
+                                "Dox_E2" ~ "Dox+E2",
+                                "No_Dox_ICI" ~ "No Dox+ICI",
+                                "Dox_Control" ~ "Dox+Control",
+                                .default = Treatment))
+percentVar_010 <- round(100 * attr(pcaData_010, "percentVar"), 2) 
+
+p1.3 <-  ggplot(pcaData_010, 
+                aes(x = PC2, 
+                    y = PC3,
+                    )) +
+  geom_point(aes(shape = Treatment,
+                 color = CellLine,
+                 ),
+               show.legend = TRUE,
+             size = 4) + 
+  stat_ellipse(mapping = aes(color = CellLine), 
+               type = "euclid", 
+               level = 5,
+               show.legend = FALSE) +
+  scale_color_manual(values = c("#e78ac3", "#a6d854", "#fc8d62","#7b3294")) +
+  xlab(paste0("PC2: ",percentVar_010[1],"% variance")) +
+  ylab(paste0("PC3: ",percentVar_010[2],"% variance")) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  size = 14,
+                                  face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 12, 
+                                  face = "bold"),
+        legend.position = "inside",
+        legend.position.inside = c(0.9, 0.85),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box = "horizontal",
+        legend.box.margin = margin(0,0,0,0),
+        legend.spacing.x = unit(0, "mm"),
+        legend.key.spacing.y = unit(0, "mm"),
+        legend.box.just = c("top"),
+        legend.text = ggtext::element_markdown(),
+        legend.background = element_rect(fill = NULL, color = "black")) +
+  guides(color = "none") +
+  coord_fixed()
+
+labels1.3 <- ggplot_build(p1.3)$data[[2]]
+
+labels1.3 %<>% group_by(colour) %>% summarise(mean_x = mean(x),
+                                              max_x = max(x),
+                                              min_x = min(x),
+                                            mean_y = mean(y),
+                                            max_y = max(y),
+                                            min_y = min(y)) %>% 
+        mutate(CellLine = c(paste0("ME16C2-", "italic('ESR1')" ),
+                            paste0("HME-CC-", "italic('ESR1')" ),
+                            paste0("ME16C2-", "italic('ESR1')" ),
+                            paste0("'76N TERT-'*", "italic('ESR1')")
+        )
+               )
+
+#had a hard time figuring out the parse, * does the trick. [see this](https://stackoverflow.com/questions/31372994/r-ggplot2-use-literal-strings-on-parse). 
+
+p1.3 + 
+        annotate(geom = "text",
+                 x = labels1.3$min_x[1],
+                 y = labels1.3$min_y[1]-3,
+                 label = labels1.3$CellLine[1],
+                 fontface = "bold",
+                 parse = TRUE
+        ) +
+         annotate(geom = "text",
+                 x = labels1.3$mean_x[2],
+                 y = labels1.3$min_y[2]-3,
+                 label = labels1.3$CellLine[2],
+                 parse = TRUE
+        ) +
+        annotate(geom = "text",
+                 x = labels1.3$mean_x[3],
+                 y = labels1.3$max_y[3]+3,
+                 label = labels1.3$CellLine[3],
+                 parse = TRUE
+        ) +
+        annotate(geom = "text",
+                 x = labels1.3$max_x[4],
+                 y = labels1.3$min_y[4]-3,
+                 label = labels1.3$CellLine[4],
+                 parse = TRUE
+        )
+
+```
+
+#### 6.2 PCA showing estrogenic responses
+
+This is figure 5B.
+
+```{r}
+
+pcaData_010 <- plotPCA(vsd_010, 
+                       intgroup=c("CellLine", "Treatment"), 
+                       ntop = 1000,
+                       returnData=TRUE,
+                       pcsToUse = c(4,5)) %>% 
+  mutate(
+    CellLine = case_match(CellLine,
+                          "76NTERT" ~ "76N TERT",
+                          "HMECC" ~ "HME-CC",
+                          .default = CellLine),
+    CellLine = paste0(CellLine, "-*ESR1*"))
+percentVar_010 <- round(100 * attr(pcaData_010, "percentVar"), 2) 
+
+p1.1 <-  ggplot(pcaData_010, 
+                aes(x = PC4, 
+                    y = PC5,
+                    shape = Treatment,
+                    color = CellLine)) +
+  geom_point(size = 4) +
+  scale_color_manual(values = c("#e78ac3", "#a6d854", "#fc8d62","#7b3294")) +
+  geom_mark_ellipse(aes(fill = NULL,
+                        color = NULL,
+                        #label = Treatment,
+                        #label = rep(c("Dox_E2", "Dox_Control", "No_Dox_ICI"), 8),
+                        ),
+                    show.legend = FALSE,
+                    con.type = "none",
+                    label.buffer = unit(-20, "mm"),
+                    label.fill = NULL
+                    ) +
+  xlab(paste0("PC4: ",percentVar_010[1],"% variance")) +
+  ylab(paste0("PC5: ",percentVar_010[2],"% variance")) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  size = 14,
+                                  face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 12, 
+                                  face = "bold"),
+        legend.position = "inside",
+        legend.position.inside = c(0.5, 0.81),
+        legend.box.spacing = unit(0, "mm"),
+        legend.box = "horizontal",
+        legend.box.margin = margin(0,0,0,0),
+        legend.spacing.x = unit(0, "mm"),
+        legend.key.spacing.y = unit(0, "mm"),
+        legend.box.just = c("top"),
+        legend.text = ggtext::element_markdown(),
+        legend.background = element_rect(fill = NULL, color = "black")) +
+  guides(shape="none") +
+  annotate(geom = "text", x = -7.5, y = 0, label = "bold(`No Dox`+ICI)", parse = TRUE) +
+  annotate(geom = "text", x = 7.5, y = 5, label = "bold(Dox+E2)", parse = TRUE) +
+  annotate(geom = "text", x = 0., y = -2, label = "bold(Dox+Control)", parse = TRUE) +
+  coord_fixed()
+
+p1.1
+```
+
+#### 6. Get DGE from all comparisons for Control vs E2
+
+In this case we define control as 1. Dox 2. H20 3. EtOH
+
+```{r}
+list_cells <- c("All", "MCF10A", "ME16C2", "HMECC", "76NTERT")
+list_comparison <- c("Treatment_Dox_E2_vs_Dox_Control", "Treatment_No_Dox_ICI_vs_Dox_Control",              "Treatment_Dox_E2_vs_Dox_Control-Treatment_No_Dox_ICI_vs_Dox_Control")
+```
+
+#### 6.1 All Cell lines
+
+Cell lines = `r cat(list_cells[1])`, Treatment =
+`r cat(list_comparison[1])`
+
+```{r message=FALSE, warning=FALSE}
+
+# get the data
+data1 <- djj_getDGE(cellline = list_cells[1], 
+           comparison = list_comparison[1])
+
+data1.1 <- djj_getDGE(cellline = list_cells[1], 
+           comparison = list_comparison[1])
+
+```
+
+#### 6.2 MCF10A-*ESR1*
+
+Cell lines = `r cat(list_cells[2])`, Treatment =
+`r cat(list_comparison[1])`
+
+```{r message=FALSE, warning=FALSE}
+# get the data
+data2 <- djj_getDGE(cellline = list_cells[2], 
+           comparison = list_comparison[1])
+```
+
+#### 6.3 ME16C2-*ESR1*
+
+Cell lines = `r cat(list_cells[3])`, Treatment =
+`r cat(list_comparison[1])`
+
+```{r message=FALSE, warning=FALSE}
+# get the data
+data3 <- djj_getDGE(cellline = list_cells[3], 
+           comparison = list_comparison[1])
+```
+
+#### 6.4 HME-CC-*ESR1*
+
+Cell lines = `r cat(list_cells[4])`, Treatment =
+`r cat(list_comparison[1])`
+
+```{r message=FALSE, warning=FALSE}
+# get the data
+data4 <- djj_getDGE(cellline = list_cells[4], 
+           comparison = list_comparison[1])
+```
+
+#### 6.5 76N TERT-*ESR1*-
+
+Cell lines = `r cat(list_cells[5])`, Treatment =
+`r cat(list_comparison[1])`
+
+```{r warning=FALSE, message=FALSE}
+# get the data
+data5 <- djj_getDGE(cellline = list_cells[5], 
+           comparison = list_comparison[1])
+```
+
+#### 6.7 Publicly avaialable data: MCF7
+
+```{r mcf7, warning=FALSE, message=FALSE}
+#get MCF7 data only
+dds_mcf7 <- dds_full[,1:6]
+dds_mcf7$Treatment <- droplevels(dds_mcf7$Treatment)
+
+#run DESeq
+dge_mcf7 <- DESeq(dds_mcf7)
+
+#the comparisions we can make
+resultsNames(dge_mcf7)
+
+# Get the DGE
+res_mcf7 <- results(dge_mcf7, name = "Treatment_E2_vs_Control", alpha = 0.05)
+
+#summary
+summary(res_mcf7)
+# Get the signficant genes
+res_sig_mcf7 <- getSig(res_mcf7, padj = 0.05)
+
+
+```
+
+#### 6.8 Publicly avaialable data: T47D
+
+```{r t47d, warning=FALSE, message=FALSE}
+#get T47D data only
+dds_t47d <- dds_full[,7:12]
+dds_t47d$CellLine
+dds_t47d$Treatment <- droplevels(dds_t47d$Treatment)
+
+#run DESeq
+dds_t47d <- DESeq(dds_t47d)
+
+#the comparisions we can make
+resultsNames(dds_t47d)
+
+# Get the DGE
+res_t47d <- results(dds_t47d, name = "Treatment_E2_vs_Control", alpha = 0.05)
+
+#summary
+summary(res_t47d)
+# Get the signficant genes
+res_sig_t47d <- getSig(res_t47d, padj = 0.05)
+
+
+```
+
+### 7. Differentially expressed genes
+
+```{r volcano_plot, warning=FALSE, message=FALSE}
+
+resultObject <- data1$results
+
+resultObject <- resultObject %>% 
+  as.data.frame() %>% 
+  drop_na(padj) %>% 
+  rownames_to_column("Ensembl_id") %>% 
+  mutate(Symbol = str_split(Ensembl_id, "_") %>% map_chr(2),
+         Rank = log2FoldChange * - log10(pvalue),
+         absLFC = abs(log2FoldChange)) %>% 
+  arrange(desc(Rank)) 
+top10 <- resultObject[1:10,]
+
+theme_prabin <- function(){
+  theme(
+      axis.text = element_text(face = "bold",
+                               size = 12,
+                               color = "black"),
+      axis.title = element_text(face = "bold",
+                                size = 14,
+                                color = "black")
+    )
+  
+}
+  
+volcano_v1 <- resultObject %>% 
+  ggplot2::ggplot(., aes(x = log2FoldChange,
+                         y = -log10(padj),
+                         label = ifelse(Rank %in% top10$Rank, Symbol, "")
+                         )
+                  ) +
+  geom_point(aes(color = ifelse(padj < 0.05, "red", "black"))) +
+  geom_text_repel(max.overlaps = Inf
+                  
+                  ) +
+  scale_color_identity() +
+  geom_hline(yintercept = -log10(0.05),
+             linetype = "dashed") +
+  geom_vline(xintercept = -log2(1.5),
+             linetype = "dashed") +
+  geom_vline(xintercept = +log2(1.5),
+             linetype = "dashed") +
+  xlim(-20, 20) + 
+  theme_bw() +
+  theme_prabin()
+
+
+volcano_v1
+```
+
+#### 7.1 Venn Diagram
+
+We will take the differentilly expressed genes Overlap between
+HBEC-ESR1, MCF7 and T47D.
+
+```{r ven_plot, warning=FALSE, message=FALSE, fig.align=}
+#A list of the MCF7, T47D and HBEC-ESR1 diffentially expressed genes with padj < 0.5 
+dge_list <- list(res_sig_mcf7,
+              res_sig_t47d,
+              data1$Significant)
+# we only need the names of the genes, not log2foldchange or other details
+dge_names_list <- dge_list %>% map(., rownames)
+
+#simplest way to plot with ggVennDiagram in this 
+
+# ggVennDiagram::ggVennDiagram(dge_names_list,
+#                              show_intersect = FALSE,
+#                              label = c("both"),
+#                              category.names = c("MCF7", "T47D", "HBEC-*ESR1*")
+#                              ) +
+#   scale_fill_distiller(palette = "Set3") 
+
+#we confirmed that it works, now we will customise the ven diagram a bit more. 
+
+# https://venn.bio-spring.top/using-ggvenndiagram#comprehensive-customization-by-using-helper-functions
+#create a dge list
+dge_list <- list(res_sig_mcf7,
+                       res_sig_t47d,
+                       data1$Significant)
+dge_names_list <- dge_list %>% map(., rownames)
+#name the list 
+names(dge_names_list) <- c("bold('MCF7')", "bold('T47D')", "bold('HBEC-')*bolditalic('ESR1')")
+
+#create a venn object
+venn_1 <- Venn(dge_names_list)
+
+data <- process_data(venn_1)
+
+fill = c("#7fc97f", 
+                       "#beaed4",
+                       "#fdc086",
+                       "#ffff99",
+                       "#386cb0",
+                       "#f0027f",
+                       "#bf5b17")
+ven_2 <- ggplot() +
+        #1. region count layer
+        ## change mapping of color filling
+        geom_polygon(aes(X, Y, fill = id, group = id),
+                     alpha = 0.5,
+                     data = venn_regionedge(data), 
+                     show.legend = FALSE) + 
+        #2. adjust edge size and color
+        geom_path(aes(X, Y, group = id),
+                  color = "black", 
+                  linewidth = 2,
+                  alpha = 0.5,
+                  data = venn_setedge(data), 
+                  show.legend = FALSE) +  
+        #3. show set label layer
+        geom_text(aes(X, Y, label = name),
+                  parse = TRUE,
+                    nudge_y = -0.5,
+               data = venn_setlabel(data),
+               size = 6) +
+        #4. region label layer
+        geom_label(aes(X, Y, label = count), 
+                   data = venn_regionlabel(data), 
+                   alpha = 0, label.size = 0,
+                   fontface = "bold",
+                   size = 5) +  
+  theme_void() +
+  scale_x_continuous(expand = expansion(mult = .2))
+
+ven_2
+```
+
+### 8. Heatamp
+
+We will use seriate
+
+```{r heatmap, warning=FALSE, message=FALSE}
+
+#sort data1
+sigData1 <- data1$Significant %>% as.data.frame() %>% arrange(desc(log2FoldChange)) %>% rownames()
+label_name <- sigData1 %>% strsplit(., "_") %>% map_chr(2) 
+label_name <- list(label_name)
+
+
+vsd_010<- vst(dds_010) %>% 
+  assay() %>% 
+  as.data.frame() %>%
+  mutate(MCF10A_Dox_Control = rowMeans(select(.,
+                                    starts_with('MCF10A_Dox_Control'))),
+         MCF10A_Dox_E2 = rowMeans(select(.,
+                                    starts_with('MCF10A_Dox_E2'))),
+         MCF10A_No_Dox_ICI = rowMeans(select(.,
+                                    starts_with('MCF10A_No_Dox_ICI'))),
+         ME16C2_Dox_Control = rowMeans(select(.,
+                                     starts_with('ME16C2_Dox_Control'))),
+         ME16C2_Dox_E2 = rowMeans(select(.,
+                                starts_with('ME16C2_Dox_E2'))),
+         ME16C2_No_Dox_ICI = rowMeans(select(.,
+                                    starts_with('ME16C2_No_Dox_ICI'))),
+         HMECC_Dox_Control = rowMeans(select(.,
+                                     starts_with('HMECC_Dox_Control'))),
+         HMECC_Dox_E2 = rowMeans(select(.,
+                                starts_with('HMECC_Dox_E2'))),
+         HMECC_No_Dox_ICI = rowMeans(select(.,
+                                    starts_with('HMECC_No_Dox_ICI'))),
+         `76NTERT_Dox_Control` = rowMeans(select(.,
+                                     starts_with('76NTERT_Dox_Control'))),
+         `76NTERT_Dox_E2` = rowMeans(select(.,
+                                starts_with('76NTERT_Dox_E2'))),
+         `76NTERT_No_Dox_ICI` = rowMeans(select(.,
+                                    starts_with('76NTERT_No_Dox_ICI'))),
+         MCF7_Control = rowMeans(select(.,
+                                    starts_with('MCF7_Control'))),
+         MCF7_E2 = rowMeans(select(.,
+                                    starts_with('MCF7_E2')))
+) %>% select( -matches("_1|_2")) %>% 
+  rownames_to_column("Gene") 
+
+##### Plot Heatmap of the E2 change ##################
+vsd_010_e2 <- vsd_010 %>% 
+  reframe(Gene = Gene,
+          `76N TERT-ESR1` = `76NTERT_Dox_E2`/`76NTERT_Dox_Control`,
+          `MCF10A-ESR1` = MCF10A_Dox_E2/MCF10A_Dox_Control,
+          `HME-CC-ESR1` = HMECC_Dox_E2/HMECC_Dox_Control,
+          `ME16C2-ESR1` = ME16C2_Dox_E2/ME16C2_Dox_Control
+            ) %>% 
+  column_to_rownames(var = "Gene")
+  
+
+ vsd_010_e2 <- vsd_010_e2[sigData1,] %>%
+  rownames_to_column("Gene") %>% 
+  mutate(Gene = str_split(Gene, "_") %>% map_chr(2)) %>%
+  column_to_rownames(var = "Gene")
+
+cell_col2 <- c("#e78ac3",
+               "#a6d854", 
+               "#fc8d62",
+               "#7b3294"
+               )
+
+names(cell_col2) <- colnames(vsd_010_e2)
+ta <- HeatmapAnnotation(
+        #first just a block to show all samples
+        Log2 = anno_block(gp = gpar(fill = "#c82d1c", lex = 0.1), 
+                         labels = "Dox+E2/\nDox+Control",
+                         labels_gp = gpar(col = "white", fontsize = 8, front = "bold"),
+                         height = unit(7.5, "mm"),
+                         show_name = FALSE),
+        #second: add column names as color
+        `Cell Line` = anno_simple(colnames(vsd_010_e2),
+                          col = cell_col2),
+        gap = unit(0.05, "cm"),
+        show_annotation_name = FALSE
+)
+
+#make a legend separately
+lgd_ta <- Legend(title = "Cell Line",
+                 colnames(vsd_010_e2)[1:4],
+                 legend_gp = gpar(fill = cell_col2),
+                 labels = gt_render(colnames(vsd_010_e2) %>% str_replace("ESR1", "*ESR1*"))
+                 )
+#plot heatmap
+h5 <- Heatmap(as.matrix(scale(vsd_010_e2)),
+              top_annotation = ta,
+              cluster_columns = FALSE,
+              show_column_names = FALSE,
+              show_column_dend = TRUE,
+              cluster_rows = TRUE,
+              show_row_dend = FALSE,
+              show_row_names = FALSE,
+              row_names_gp = gpar(fontsize = 6),
+              width = unit(2, "cm"), 
+              height = unit(10, "cm"),
+              show_heatmap_legend = FALSE
+              )
+
+#plot heatmap and legend
+#ComplexHeatmap::draw(h5, annotation_legend_list = list(lgd_ta))
+
+##### Plot Heatmap of the ICI change ##################
+
+vsd_010_ici <- vsd_010 %>% 
+  reframe(Gene = Gene,
+          `76N TERT-ESR1` = `76NTERT_No_Dox_ICI`/`76NTERT_Dox_Control`,
+          `MCF10A-ESR1` = MCF10A_No_Dox_ICI/MCF10A_Dox_Control,
+          `HME-CC-ESR1` = HMECC_No_Dox_ICI/HMECC_Dox_Control,
+          `ME16C2-ESR1` = ME16C2_No_Dox_ICI/ME16C2_Dox_Control
+            ) %>% 
+  column_to_rownames(var = "Gene")
+  
+
+ vsd_010_ici <- vsd_010_ici[sigData1,] %>%
+  rownames_to_column("Gene") %>% 
+  mutate(Gene = str_split(Gene, "_") %>% map_chr(2)) %>%
+  column_to_rownames(var = "Gene")
+ 
+ta2 <- HeatmapAnnotation(
+        #first just a block to show all samples
+        Log2 = anno_block(gp = gpar(fill = "#377eb8", lex = 0.1), 
+                         labels = "No Dox+ICI/\nDox+Control",
+                         labels_gp = gpar(col = "white", fontsize = 8, front = "bold"),
+                         height = unit(7.5, "mm"),
+                         show_name = FALSE),
+        #second: add column names as color
+        `Cell Line` = anno_simple(colnames(vsd_010_e2),
+                          col = cell_col2),
+        gap = unit(0.05, "cm"),
+        show_annotation_name = FALSE
+)
+
+#make a legend separately
+lgd_ta2 <- Legend(title = "Cell Line",
+                 colnames(vsd_010_ici)[1:4],
+                 legend_gp = gpar(fill = cell_col2),
+                 labels = gt_render(colnames(vsd_010_ici) %>% str_replace("ESR1", "*ESR1*")))
+
+h5_ici <- Heatmap(as.matrix(scale(vsd_010_ici)),
+              top_annotation = ta2,
+              cluster_columns = FALSE,
+              show_column_names = FALSE,
+              show_column_dend = TRUE,
+              cluster_rows = TRUE,
+              show_row_dend = FALSE,
+              show_row_names = FALSE,
+              row_names_gp = gpar(fontsize = 6),
+              width = unit(2, "cm"), 
+              height = unit(10, "cm"),
+              show_heatmap_legend = FALSE
+            
+)
+
+#ComplexHeatmap::draw(h5_ici, annotation_legend_list = list(lgd_ta2))
+
+#Get the MCF7 and T47D
+dds_cancer <- dds_full[,1:12]
+dds_cancer$Treatment <- droplevels(dds_cancer$Treatment)
+vsd_cancer <- vst(dds_cancer)
+
+vsd_cancer %<>% 
+  assay() %>% 
+  as.data.frame() %>%
+  mutate(MCF7_Control = rowMeans(select(.,
+                                    starts_with('MCF7_Control'))),
+         MCF7_E2 = rowMeans(select(.,
+                                    starts_with('MCF7_E2'))),
+         T47D_Control = rowMeans(select(.,
+                                    starts_with('T47D_Control'))),
+         T47D_E2 = rowMeans(select(.,
+                                    starts_with('T47D_E2')))
+) %>% select( -matches("_1|_2")) %>% 
+  rownames_to_column("Gene") %>% 
+  reframe(Gene = Gene,
+          MCF7 = MCF7_E2/MCF7_Control,
+          T47D = T47D_E2/T47D_Control
+            ) %>% 
+  column_to_rownames(var = "Gene")
+
+
+vsd_cancer <- vsd_cancer[sigData1,] %>%
+  rownames_to_column("Gene") %>% 
+  mutate(Gene = str_split(Gene, "_") %>% map_chr(2)) %>%
+  column_to_rownames(var = "Gene")
+
+cell_col3 <- c("#999999",
+               "#a65628"
+               )
+
+names(cell_col3) <- colnames(vsd_cancer) 
+
+ta3 <- HeatmapAnnotation(
+        #first just a block to show all samples
+        Log2 = anno_block(gp = gpar(fill = "#c82d1c", lex = 0.1), 
+                         labels = "E2/\nControl",
+                         labels_gp = gpar(col = "white", fontsize = 8, front = "bold"),
+                         height = unit(7.5, "mm"),
+                         show_name = FALSE),
+        #second: add column names as color
+        `Cell Line` = anno_simple(colnames(vsd_cancer),
+                          col = cell_col3),
+        gap = unit(0.05, "cm")
+)
+
+#make a legend separately
+lgd_ta3 <- Legend(title = "Cell Line",
+                 colnames(vsd_cancer)[1:2],
+                 legend_gp = gpar(fill = cell_col3),
+                 labels = gt_render(colnames(vsd_cancer) %>% str_replace("ESR1", "*ESR1*")))
+
+h7 <- Heatmap(as.matrix(scale(vsd_cancer)),
+              top_annotation = ta3,
+              cluster_columns = FALSE,
+              show_column_names = FALSE,
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              cluster_rows = TRUE,
+              show_row_names = FALSE,
+              row_names_gp = gpar(fontsize = 6),
+              width = unit(1, "cm"), 
+              height = unit(10, "cm"),
+              show_heatmap_legend = FALSE
+              )
+
+#ComplexHeatmap::draw(h7, annotation_legend_list = list(lgd_ta3))
+
+
+#create a legend for all three graphs
+lgd_ta4 <- Legend(title = "Cell Line",
+                 c(colnames(vsd_010_ici),colnames(vsd_cancer))[1:6],
+                 legend_gp = gpar(fill = c(cell_col2, cell_col3)),
+                 labels = gt_render(c(colnames(vsd_010_e2),colnames(vsd_cancer)) %>% str_replace("ESR1", "*ESR1*")))
+       
+lgd_ta5 <- Legend(title = "Log2 Ratio",
+                  col_fun = colorRamp2(c(0, 2, 3),
+                                       colors = c("blue", "white","red")),
+                  at = c(0,1,2,3,4),
+                  labels = c(-4, -2, 0, 2, 4)
+                    )
+ComplexHeatmap::draw(h5+h5_ici+h7, annotation_legend_list = list(lgd_ta4, lgd_ta5), ht_gap = unit(0.4, "mm"))
+```
+
+### 9. GSEA Analysis
+
+#### 9.1 Prepare Data for GSEA
+
+Generate log2TPM data with entrez geneID For HMEC Control/E2 and
+Control/ICI
+
+```{r}
+###10.1 Generate log2TPM data with entrez geneID For HMEC Control/E2
+
+# We will used the merged columns
+
+# obtain log2 counts data
+vsd2_gsva_010_e2 <-  vsd_010 %>% 
+        reframe(Gene = Gene,
+                MCF10A_E2 = MCF10A_Dox_E2/MCF10A_Dox_Control,
+                `76NTERT_E2` = `76NTERT_Dox_E2`/`76NTERT_Dox_Control`,
+                ME16C2_E2 = ME16C2_Dox_E2/ME16C2_Dox_Control,
+                HMECC_E2 = HMECC_Dox_E2/HMECC_Dox_Control,
+                MCF10A_ICI = MCF10A_No_Dox_ICI/MCF10A_Dox_Control,
+          `76NTERT_ICI` = `76NTERT_No_Dox_ICI`/`76NTERT_Dox_Control`,
+          ME16C2_ICI = ME16C2_No_Dox_ICI/ME16C2_Dox_Control,
+          HMECC_ICI = HMECC_No_Dox_ICI/HMECC_Dox_Control
+                  ) %>% 
+        mutate(ensembl_id = str_split(Gene, "\\.") %>% map_chr(1))
+
+# First let's create a mapped data frame we can join to the gene expression values
+mapped2_df_010_e2 <- mapIds(
+                # Replace with annotation package for the organism relevant to your data
+                org.Hs.eg.db,
+                keys = vsd2_gsva_010_e2$ensembl_id,
+                # Replace with the type of gene identifiers in your data
+                keytype = "ENSEMBL",
+                # Replace with the type of gene identifiers you would like to map to
+                column = "ENTREZID",
+                # This will keep only the first mapped value for each Ensembl ID
+                multiVals = "first"
+        ) %>% 
+        enframe() %>% 
+        `colnames<-`(c("Ensembl", "entrez_id")) %>% 
+        # If an Ensembl gene identifier doesn't map to a Entrez gene identifier,
+        # drop that from the data frame
+        dplyr::filter(!is.na(entrez_id)) %>%
+        # Now let's join the rest of the expression data
+        dplyr::inner_join(vsd2_gsva_010_e2, by = c("Ensembl" = "ensembl_id"))
+
+
+#see how many duplicated gene ids are there
+sum(duplicated(mapped2_df_010_e2$entrez_id))
+
+# First let's determine the gene means
+gene2_means_010_e2 <- rowMeans(mapped2_df_010_e2 %>% dplyr::select(-Ensembl, -entrez_id, -Gene))
+
+# Let's add this as a column in our mapped_df
+mapped2_df_010_e2 <- mapped2_df_010_e2 %>%
+        # Add gene_means as a column called gene_means
+        dplyr::mutate(gene2_means_010_e2) %>%
+        # Reorder the columns so gene_means column is upfront
+        dplyr::select(Ensembl, entrez_id, gene2_means_010_e2, dplyr::everything())
+
+filtered2_mapped_df_010_e2 <- mapped2_df_010_e2 %>%
+        # Sort so that the highest mean expression values are at the top
+        dplyr::arrange(dplyr::desc(gene2_means_010_e2)) %>%
+        # Filter out the duplicated rows using `dplyr::distinct()`
+        dplyr::distinct(entrez_id, .keep_all = TRUE)
+
+sum(duplicated(filtered2_mapped_df_010_e2$entrez_id))
+
+# create rownames by Entrez gene id and remove Ensemble ID & SYMBOLS
+filtered2_mapped_matrix_010_e2 <- filtered2_mapped_df_010_e2 %>%
+        # GSVA can't the Ensembl IDs so we should drop this column as well as the means
+        dplyr::select(-Ensembl, -gene2_means_010_e2, -Gene) %>%
+        # We need to store our gene identifiers as row names
+        tibble::column_to_rownames("entrez_id") %>%
+        # Now we can convert our object into a matrix
+        as.matrix()
+
+expr2_010_e2 <- filtered2_mapped_df_010_e2 %>% 
+  select(-c("Ensembl","entrez_id","gene2_means_010_e2")) %>% 
+  mutate(NAME = str_split(Gene, "_") %>% map_chr(2),
+         DESCRIPTION = rep("na")) %>%
+  select(-Gene) %>%
+  relocate(c("NAME", "DESCRIPTION"), .before = "MCF10A_E2")
+
+
+# expr2_010_e2 %>% head %>% view
+# 
+# if(!dir.exists("../GSEA")){
+#   dir.create("../GSEA")
+# }
+# if(!file.exists("../GSEA/Hmec_e2_ici_expression.txt")){
+#   write_tsv(expr2_010_e2,file = "../GSEA/Hmec_e2_ici_expression.txt")
+# }
+# 
+# Hmec_gene_ranks <- data1$Significant %>% 
+#   as.data.frame() %>% 
+#   rownames_to_column(var = "Gene") %>% 
+#    mutate(Gene = str_split(Gene, "_") %>% map_chr(2),
+#           Rank = log2FoldChange * - log10(pvalue)) %>% 
+#   select(Gene, Rank) %>% 
+#   arrange(desc(Rank))
+# 
+# if(!file.exists("../GSEA/Hmec_gene_ranks.rnk")){
+#   write_tsv(Hmec_gene_ranks,file = "../GSEA/Hmec_gene_ranks.rnk")
+# }
+# 
+# phenotype_gsea <- list( a = c(ncol(expr2_010_e2)-1, 2, 1),
+#                         b = paste("#", "Estrogen", "ICI"),
+#                         c = rep(c(0,1), each = 4))
+# 
+# if(!file.exists("../GSEA/Phen_Hmec_e2_ici_expression.cls")){
+#   write_csv(phenotype_gsea,file = "../GSEA/Phen_Hmec_e2_ici_expression.cls")
+# }
+
+```
+
+#### 9.2 Create a top-table plot like blitzGSEA
+
+```{r GSEA, warning=FALSE, message=FALSE, fig.align='center', fig.height=5, fig.width=9}
+
+### I did the GSEA analysis (not the pre-ranked) with phenotypes E2 and Dox. 
+### GSEA producess a report in an html file, in which all information is linked. 
+### From that we will the list of geneset enrichment.
+### For each phenotype, there is 1 file. So we will read both
+
+gsea_e2 <- read_tsv("./data/my_analysis.Gsea.1694117944567_e2/gsea_report_for_E2_1694117944567.tsv")
+gsea_ctrl <- read_tsv("./data/my_analysis.Gsea.1694117944567_e2/gsea_report_for_Dox_1694117944567.tsv")
+
+# According to GSEA, 
+# https://docs.gsea-msigdb.org/#GSEA/GSEA_User_Guide/#gsea-statistics
+# The false discovery rate (FDR) is the estimated probability that a gene set with a given NES represents a false positive finding. For example, an FDR of 25% indicates that the result is likely to be valid 3 out of 4 times. The GSEA analysis report highlights enrichment gene sets with an FDR of less than 25% as those most likely to generate interesting hypotheses and drive further research, but provides analysis results for all analyzed gene sets. In general, given the lack of coherence in most expression datasets and the relatively small number of gene sets being analyzed, an FDR cutoff of 25% is appropriate. However, if you have a small number of samples and use gene_set permutation (rather than phenotype permutation) for your analysis, you are using a less stringent assessment of significance and would then want to use a more stringent FDR cutoff, such as 5%.
+# So will collect gene sets with FDR 0.25 cut off.
+# 
+
+for.blitz <- list(gsea_e2, gsea_ctrl)
+
+# purr::map function is a bit tricky to figure out.
+for.blitz <- for.blitz %>% map(., filter, `FDR q-val` < 0.25)
+for.blitz %>% map(., dim)
+for.blitz %<>% bind_rows() 
+for.blitz
+# we have 8 gene set enriched and 1 negatively associated
+
+### we need to get information on each genes on these gene sets.
+### these are saved as separate files in the GSEA result folder.
+### Helpflly names with the same geneset name. 
+### we will keep the genelist as a dataframe, and have all 9 as list of 
+### 9 dataframes.
+
+for.blitz2 <- lapply(1:9, function(x){
+  read_tsv(paste("data/my_analysis.Gsea.1694117944567_e2/", for.blitz$NAME[x], ".tsv", sep = "")) %>% 
+    select(`RANK IN GENE LIST`, `CORE ENRICHMENT`) %>% 
+    mutate(NAME = str_remove(for.blitz$NAME[x], "HALLMARK_"),
+           NES = for.blitz$NES[x],
+           stack = x,
+           path_rank = x-0.5)
+})
+
+### We will create a top table plot like this. 
+#### https://github.com/MaayanLab/blitzgsea
+
+# first take 1 gene-set a create a plot
+a1 <- ggplot2::ggplot(for.blitz2[[9]],
+                mapping = aes(x = `RANK IN GENE LIST`,
+                              y = path_rank,
+                              group = `NES`)) +
+        geom_tile(fill = ifelse(for.blitz2[[9]]$NES>0, "red", "blue"),
+                 alpha = 1,
+                 width = 10) +
+        theme_bw() +
+        theme(panel.grid = element_blank(),
+              panel.border = element_blank(),
+              axis.text.y = element_blank(),
+              axis.title.y = element_blank(),
+              axis.ticks.y = element_blank(),
+              axis.text.x = element_blank(),
+              axis.title.x = element_blank(),
+              axis.ticks.x = element_blank(),
+              legend.position = "none"
+              ) 
+# in the preivous version I have kept the geom_col and colour
+# in this version, I have used geom_tile and fill. I makes a little faded, which is great to show enrichment of the geneset to one phenotype.
+
+### We will create a1 like plots for each gene-set and append them with cowplot.
+### we will create the x-axis only to append to the bottom of the graphs
+
+# make only the x-axis
+a2 <- ggplot2::ggplot(for.blitz2[[1]],
+                      mapping = aes(x = `RANK IN GENE LIST`,
+                                    y = 0,
+                                    color = ifelse(`NES` > 1, "red", "blue"))) +
+        geom_col() +
+        theme_bw() +
+        theme(panel.grid = element_blank(),
+              panel.border = element_blank(),
+              axis.text.y = element_blank(),
+              axis.title.y = element_blank(),
+              axis.ticks.y = element_blank(),
+              axis.text.x = element_text(size = 12, face = "bold"),
+              axis.title.x = element_text(size = 12, face = "bold"),
+              legend.position = "none"
+        ) 
+
+# this is how it will look in combination
+#cowplot::plot_grid(a1,NULL, a2, ncol = 1, nrow = 3,align = "hv",rel_heights = c(1, -0.1, 0.1))
+
+
+### We will make a function for plotting all data together
+### When looped using purr::map function, this will give us a list of plots
+### We will then append the plots and the x-axis will cowplot.
+
+# the function is same as the code for plotting a1
+plot_bars <- function(data){
+        ggplot2::ggplot(data,
+                        mapping = aes(x = `RANK IN GENE LIST`,
+                                      y = path_rank,
+                                      group = `NES`)) +
+                geom_tile(fill = ifelse(data$NES>0, "red", "blue"),
+                          alpha = 1,
+                          width = 10) +
+                theme_bw() +
+                theme(panel.grid = element_blank(),
+                      panel.border = element_blank(),
+                      axis.text.y = element_blank(),
+                      axis.title.y = element_blank(),
+                      axis.ticks.y = element_blank(),
+                      axis.text.x = element_blank(),
+                      axis.title.x = element_blank(),
+                      axis.ticks.x = element_blank(),
+                      legend.position = "none"
+                ) 
+}
+
+# make a list of plots
+blitz.plots <- for.blitz2 %>% map(., plot_bars)
+# the plot labels are the names of the gene sets or pathways. 
+# It may be more human readable to remove the "HALLMARK_"
+# We will add labels after the plots are combined in cowplot
+labels <- str_remove(for.blitz$NAME, "HALLMARK_")
+
+### Combine the plots 
+### But making sure that there are NULL plots in between. This helps us remove
+### spaces between our plots.
+### Hence, we have total 19 rows of plots and 1 column. 
+
+cowd <- cowplot::plot_grid(blitz.plots[[1]],
+                   NULL,
+                   blitz.plots[[2]],
+                   NULL,
+                   blitz.plots[[3]],
+                   NULL,
+                   blitz.plots[[4]],
+                   NULL,
+                   blitz.plots[[5]],
+                   NULL,
+                   blitz.plots[[6]],
+                   NULL,
+                   blitz.plots[[7]],
+                   NULL,
+                   blitz.plots[[8]],
+                   NULL,
+                   blitz.plots[[9]],
+                   NULL,
+                   a2,
+                   ncol = 1, 
+                   rnow = 19,
+                   label_x = -1,
+                   label_size = 12,
+                   label_y = 0.8,
+                   align = "hv",
+                   axis = "l",
+                   hjust = -1,
+                   vjust = ,
+                   rel_heights = c(rep(c(0.5,-0.1),  8), 0.5, -0.1, 0.5),
+                   rel_widths = 0.5
+                   
+                   )
+
+### create margins for putting the labels.
+### we would like to have both left and right margins and some top margins too.  
+cowd_p <- cowd + theme(plot.margin = unit(c(1,4,0,8), "cm"))
+
+# y-axis positions for the labels. 
+y_pos <- seq(0.99,0.19, by = -0.09)
+
+# the gene-sets phrases are unequal in length. there is no particular method to 
+# align them. Hence, we will check the position and adjust x positions accordingly.
+cowd_p2 <- cowd_p + draw_plot_label(label = labels,
+                                  x = c(-1,-0.95,-0.45, -0.6, -0.6, -1.05, -0.65, -0.43, -0.72),
+                                  y = y_pos,
+                                  size = 12,
+                                  fontface = "plain"
+                                        )
+# On the right hand side, we will add normalised enrichment score for each gene set.
+cowd_p3 <- cowd_p2 + draw_plot_label(label = round(for.blitz$NES, digits = 2),
+                                     x = c(rep(0.95,3), 0.97, rep(0.95, 4), 0.945),
+                                     y= y_pos,
+                                     size = 12)
+# On the right hand side, we will add normalised enrichment score for each gene set.
+cowd_p4 <- cowd_p3 + draw_plot_label(label = round(for.blitz$`FDR q-val`, digits = 2),
+                                     x = c(rep(1.1,4), 1.12, rep(1.1, 4)),
+                                     y= y_pos,
+                                     size = 12)
+# On further right, we will ad the FDR value.
+cowd_p5 <- cowd_p4 + draw_plot_label(c(" GENE SET", "", "NES", "FDR"),
+                                     x = c(-0.5, 0, 0.92,1.08  ),
+                                     y = 1.05,
+                                     size = 14)
+# now we will create rectangles to give the plots its own home
+cowd_p6 <- cowd_p5 +  
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.995, yend = 0.995) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.905, yend = 0.905) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.82, yend = 0.82) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.733, yend = 0.733) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.645, yend = 0.645) + 
+        annotate("segment", x = 1.3, xend = -0.555, y = 0.56, yend = 0.555) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.47, yend = 0.47) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.385, yend = 0.385) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.296, yend = 0.296) + 
+        annotate("segment", x = 1.3, xend = -0.5, y = 0.21, yend = 0.21)
+# adding the phenotypes for each 
+cowd_p7 <- cowd_p6 + draw_plot_label(label = c("Dox+E2", "Dox+Control"),
+                          x = c(-0.037, 0.81  ),
+                          y = 0.1,
+                          size = 14) +
+        annotate("segment", x = 0.065, xend = 0.065, y = 0.21, yend = 0.995)+
+        annotate("segment", x = 0.95, xend = 0.95, y = 0.21, yend = 0.995)
+
+cowd_p7
+
+
+
+```
+
+## Additional
+
+### 1. Plot a barplot
+
+```{r}
+vsd_010 <- dds_010 %>% vst()
+x <- vsd_010 %>% assay() %>% as.data.frame %>% rownames_to_column(var = "Gene")
+
+genelist <- list("RAD51",'BRCA1', "BRCA2", "TP53", "APOBEC3B")
+
+#this is a re-usaable function to to plot individual genes in dotp and line plot
+barplotGenes <- function(dataset = vsd_010, genelist = list()){
+  x <- vsd_010 %>% assay() %>% as.data.frame %>% rownames_to_column(var = "Gene")
+  genelist <- paste(genelist, "$", sep = "")
+  bardata <- genelist %>% map(~x[str_detect(x$Gene, .),]) %>% 
+    bind_rows() %>% pivot_longer(cols = !Gene) %>% 
+    mutate(CellLine = str_split(name, "_") %>% map_chr(1),
+           Treatment = case_when(str_detect(name, "E2") ~ "Dox_E2",
+                                 str_detect(name, "No") ~ "No_Dox_ICI",
+                                 str_detect(name, "Control") ~ "Dox_Control"),
+           Gene_Name = str_split(Gene, "_") %>% map_chr(2),
+           Replicate = reverse(name) %>% substr(start = 1, stop = 1)
+    ) %>% mutate(Treatment = factor(Treatment, levels = c("Dox_Control", "Dox_E2", "No_Dox_ICI")))
+  y = bardata %>% ggplot(., aes(x = Treatment,
+                                y = value,
+                                group = Replicate)) +
+    geom_line() + 
+    geom_point() + facet_grid(Gene_Name ~ CellLine) +
+    labs(x = "", y = "Log2Counts") +
+    theme_bw() +
+    theme(axis.text = element_text(angle = 90))
+  return(y)
+  
+}
+
+a <- barplotGenes(genelist = genelist)
+genelist <- list("ESR1","AREG", "PDK4", "TGFA", "RSPO1")
+genelist <- list("KRT8", "KRT18", "KRT19", "KRT14", "BMI1")
+a <- barplotGenes(genelist = genelist)
+
+
+# second barplot to plot genes 
+barplotGenes2 <- function(dataset = counts.sf_normalized, genelist = list()){
+  x <- dataset %>% as.data.frame() %>% rownames_to_column(var = "Gene")
+  bardata <- genelist %>% map(~x[str_detect(x$Gene, .),]) %>% 
+      bind_rows() %>% pivot_longer(cols = !Gene) %>% 
+      mutate(CellLine = str_split(name, "_") %>% map_chr(1),
+             Treatment = case_when(str_detect(name, "E2") ~ "Dox+E2",
+                                   str_detect(name, "No") ~ "No Dox+ICI",
+                                   str_detect(name, "Control") ~ "Dox+Control"),
+             Gene_Name = str_split(Gene, "_") %>% map_chr(2),
+             Replicate = reverse(name) %>% substr(start = 1, stop = 1)
+      ) %>% mutate(Treatment = factor(Treatment, levels = c("Dox+Control", "Dox+E2", "No Dox+ICI"))) %>% 
+    group_by(CellLine, Treatment, Gene_Name) %>% dplyr::summarise(Mean = mean(value), Sd = sd(value)) %>%
+    mutate(Gene_Name = factor(Gene_Name, levels = substr(genelist, 1, nchar(genelist)-1)))
+
+  y = bardata %>% ggplot(., aes(x = Treatment,
+                                  y = Mean)) +
+      geom_bar(aes(fill = Treatment),stat = "identity", position = position_dodge2()) +
+      geom_pointrange(aes(ymin = Mean-Sd, ymax = Mean-Sd),position = position_dodge2(width = 0.5, padding = 0.5)) +
+      facet_grid(Gene_Name ~ CellLine, scales = "free_y" ) +
+      labs(x = "", y = "Normalised Counts") +
+      theme_bw() +
+      theme(axis.text = element_text(angle = 90),
+            axis.text.x = element_text(hjust = 1, angle = 45)) +
+    theme_pdm4014()
+  return(y)
+  
+}
+
+
+genelist <- list("TFF1$", "GREB1$", "PDZK1$")
+barplotGenes2(genelist = genelist)
+
+```
+
+### 1.2 Save Processed Data for GEO Submission
+
+In this case we will save the normalised counts data from RNA-Seq data
+generated here i.e. of the HBEC-*ESR1* not of the BC cell lines.
+
+```{r }
+
+
+ # write_tsv(as.data.frame(counts.sf_normalized), file = "../geo_submission_RNAseq//normalised_read_counts_all_samples.txt")
+```
+
+##  {.unnumbered}
+
+### Session Info
+
+```{r}
+sessioninfo::session_info()
+
+```
